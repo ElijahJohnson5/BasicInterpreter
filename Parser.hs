@@ -33,9 +33,9 @@ data Expression = BinaryOp String (Expression -> Expression -> Expression) Expre
   | Not Expression
   | Negate Expression
   | Id Char | Function String Expression 
-  | IntConst Int | StringConst String 
-  | FloatConst Float 
-  | BoolConst Bool | Array Expression [Expression] 
+  | IntConst { intConst :: Int } | StringConst String 
+  | FloatConst { floatConst :: Float } 
+  | BoolConst { boolConst :: Bool } | Array Expression [Expression] 
   | SemiPrint Expression | CommaPrint Expression | NewLineExpression Expression
   | Array1D { array1d :: (IOArray Int Expression) } 
   | Array2D { array2d :: (IOArray (Int, Int) Expression) }
@@ -184,7 +184,7 @@ parseNext = do { symbol "NEXT"; a <- idList; return (Next a) }
 
 parseOn = do { symbol "ON"; a <- expression; symbol "GOTO"; b <- intList; return (On a b) }
 
-parsePrint = do { symbol "PRINT"; a <- printList; return (Print a) } +++ do { symbol "PRINT"; return $ Print []}
+parsePrint = do { symbol "PRINT"; a <- printList; return (Print a) } +++ do { symbol "PRINT"; return $ Print [] }
 
 parseRem = do { symbol "REM"; a <- many (sat isPrint); return (Rem a) }
 
@@ -211,19 +211,26 @@ evalStatements :: [(Int, Statement)] -> (Int, [Statement]) -> ReaderT (IntMap.In
 evalStatements stack (line,[]) = do
   lMap <- ask
   evalStatements stack (fromJust (IntMap.lookupGT line lMap))
-evalStatements stack (line,(s@(For id ini to step):ss)) = do
-  s' <- evalStatement s
-  evalStatements ((line,s'):stack) (line,ss)
+evalStatements (f@(line1,(For (Id a) ini1 to1 step1)):stack) (line,(s@(For (Id b) ini2 to2 step2):ss)) = 
+  if (a == b && line1 == line) then do 
+    evalStatements (f : stack) (line, ss)
+  else do 
+    s' <- evalStatement s
+    case s' of
+      NoOp -> forSkip stack (line, ss)
+      otherwise -> evalStatements ((line,s') : f : stack) (line, ss)
+evalStatements stack (line,(s@(For (Id b) ini2 to2 step2):ss)) = do
+    s' <- evalStatement s
+    case s' of 
+      NoOp -> forSkip stack (line, ss)
+      otherwise -> evalStatements ((line,s') : stack) (line, ss)
 evalStatements (f@(line,(For id ini to step)):stack) (b,(s@(Next (i:is)):ss)) = do
   id' <- evalExpression id
   a <- forCheck id line id' to step
   case a of 
     Goto n -> do 
       lMap <- ask
-      if (line == b) 
-        -- TODO Change the then part, have to go back in the current line
-        then evalStatements (f:stack) (fromJust (IntMap.lookupGT line lMap)) 
-        else evalStatements (f:stack) (fromJust (IntMap.lookupGT line lMap))
+      evalStatements (f:stack) (n, (lMap IntMap.! n))
     NoOp -> evalStatements stack (b,(Next is):ss)
 evalStatements stack (b,gs@(GoSub n):ss) = do
   lMap <- ask
@@ -251,10 +258,17 @@ evalStatements stack (line,(s:ss)) = do
 ifStatement (BoolConst a) b = if a then (Goto b) else NoOp
 
 forCheck :: Expression -> Int -> Expression -> Expression -> Expression -> ReaderT (IntMap.IntMap [Statement]) (StateT (Map.Map String Expression) IO) Statement
-forCheck id line (IntConst a) (IntConst b) (IntConst step) = do
-  insertSymbol id (IntConst (a + step))
-  -- Store operator somewhere either (<=) or (>=) based on start of loop
-  if ((a + step) <= b) then return (Goto line) else return (NoOp)
+forCheck id line (IntConst a) to step = do
+  step' <- evalExpression step
+  insertSymbol id (IntConst (a + (intConst step')))
+  to' <- evalExpression to
+  if (boolConst to') then return (Goto line) else return (NoOp)
+
+forSkip stack (l,[]) = do 
+  lMap <- ask 
+  forSkip stack (fromJust (IntMap.lookupGT l lMap))
+forSkip stack (l,((Next i):ss)) = evalStatements stack (l, ss)
+forSkip stack (l,(s:ss)) = forSkip stack (l,ss) 
 
 evalStatement :: Statement -> ReaderT (IntMap.IntMap [Statement]) (StateT (Map.Map String Expression) IO) Statement
 evalStatement (If a b) = do
@@ -262,14 +276,18 @@ evalStatement (If a b) = do
   return (ifStatement a' b)
 evalStatement s@(For id ini to step) = do
   ini' <- evalExpression ini
-  to' <- evalExpression to
   step' <- evalExpression step
+  to' <- evalExpression to
   insertSymbol id ini'
-  return (For id ini' to' step')
+  res <- forHelper id ini' to to' step step'
+  return res
 evalStatement a@(Goto n) = return a 
 evalStatement s@(On x gotos) = do
   x' <- evalExpression x
   onGotoHelper x' gotos
+evalStatement s@(Print []) = do
+  liftIO $ putStrLn ""
+  return s
 evalStatement s@(Print xs) = do
   xs' <- mapM evalExpression xs
   printStatement xs'
@@ -302,6 +320,18 @@ evalStatement s@(Input str expr) = do
   insertMultipleSymbols expr (fmap IntConst b)
   return s
 evalStatement s = return s
+
+forHelper id ini' to to' step step' = do
+  if (intConst step') > 0 then 
+      if (intConst ini') <= (intConst to') then
+          return (For id ini' (BinaryOp "<=" (liftRela (<=)) id to) step)
+        else 
+          return NoOp
+    else 
+      if (intConst ini') >= (intConst to') then
+          return (For id ini' (BinaryOp ">=" (liftRela (>=)) id to) step)
+        else
+          return NoOp
 
 onGotoHelper _ [] = error "Invalid on goto"
 onGotoHelper (IntConst 1) ((IntConst x):xs) = return (Goto x)
@@ -360,19 +390,19 @@ printStatement ((NewLineExpression (StringConst a):xs)) = do
   liftIO $ putStrLn a
   printStatement xs
 printStatement ((NewLineExpression (IntConst a):xs)) = do
-  liftIO $ putStrLn (show a ++ " ")
+  liftIO $ putStrLn (show a)
   printStatement xs
 printStatement ((NewLineExpression (FloatConst a):xs)) = do
-  liftIO $ putStrLn (show a ++ " ")
+  liftIO $ putStrLn (show a)
   printStatement xs
 printStatement ((CommaPrint (StringConst a)):xs) = do
-  liftIO $ putStr (a ++ " ")
+  liftIO $ putStr (a ++ "\t")
   printStatement xs
 printStatement ((CommaPrint (IntConst a)):xs) = do
-  liftIO $ putStr (show a ++ " ")
+  liftIO $ putStr (show a ++ "\t")
   printStatement xs
 printStatement ((CommaPrint (FloatConst a)):xs) = do
-  liftIO $ putStr (show a ++ " ")
+  liftIO $ putStr (show a ++ "\t")
   printStatement xs
 printStatement ((SemiPrint (StringConst a)):xs) = do
   liftIO $ putStr a
@@ -405,12 +435,12 @@ basicTab (IntConst a) = return (StringConst $ replicate a ' ')
 
 create2DArray  :: (Int,Int) -> IO (IOArray (Int,Int) Expression)
 create2DArray (x,y) = do
-  b <- newArray ((1,1), (x,y)) (IntConst 0)
+  b <- newArray ((0,0), (x,y)) (IntConst 0)
   return b
 
 create1DArray  :: Int -> IO (IOArray Int Expression)
 create1DArray x = do
-  b <- newArray (1,x) (IntConst 0)
+  b <- newArray (0,x) (IntConst 0)
   return b
 
 insertArray :: Expression -> ReaderT (IntMap.IntMap [Statement]) (StateT (Map.Map String Expression) IO) ()
