@@ -129,8 +129,8 @@ evalStatement s@(Dim xs) = do
 evalStatement s@(Input str expr) = do 
   liftIO $ putStr (str ++ " ")
   a <- liftIO $ getLine
-  let b = fmap (read :: String -> Int) (sepLineBy a ',')
-  insertMultipleSymbols expr (fmap IntConst b)
+  let b = fmap (read :: String -> Float) (sepLineBy a ',')
+  insertMultipleSymbols expr (fmap FloatConst b)
   return s
 evalStatement s = return s
 
@@ -187,7 +187,7 @@ evalExpression arr@(Array (Id a) b) = do
   lift $ lift $ readFromArray (symbolMap Map.! (a : "arr")) b'
 evalExpression (Function name a) = do
   a' <- evalExpression a
-  b <- lift $ lift $ getBasicFunction name $ a'
+  b <- liftIO $ getBasicFunction name $ a'
   return b
 evalExpression (NewLineExpression a) = printExpressionHelper NewLineExpression a
 evalExpression (CommaPrint a) = printExpressionHelper CommaPrint a
@@ -221,9 +221,12 @@ basicInt (FloatConst a) = do
 basicInt a = return a
 
 basicRnd :: Expression -> IO Expression
-basicRnd (IntConst a) = do 
-  a' <- (randomRIO (0, (fromIntegral a)) :: IO Float)
+basicRnd (IntConst 1) = do 
+  a' <- (randomRIO (0, 1) :: IO Float)
   return (FloatConst a')
+basicRnd (IntConst a) = do
+  a' <- (randomRIO (0, a) :: IO Int)
+  return (IntConst a')
 
 basicTab :: Expression -> IO Expression
 basicTab (IntConst a) = return (StringConst $ replicate a ' ')

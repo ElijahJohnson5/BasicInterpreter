@@ -60,7 +60,6 @@ liftOp op (FloatConst a) (FloatConst b) = FloatConst $ a `op` b
 liftOp op (FloatConst a) (IntConst b) = FloatConst $ a `op` (fromIntegral b)
 liftOp op (IntConst a) (FloatConst b) = FloatConst $ (fromIntegral a) `op` b
 
-
 liftOp' op (IntConst a) (IntConst b) = FloatConst $ (fromIntegral a) `op` (fromIntegral b)
 liftOp' op x y = liftOp op x y
 
