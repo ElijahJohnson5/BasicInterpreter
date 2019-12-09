@@ -1,7 +1,6 @@
-10 LET A = 10
-20 DIM N(A)
-30 FOR I = 1 TO A - 1
-40 FOR J = 1 TO (A - I)
-50 PRINT I; J
-60 NEXT J, I
-70 END
+10 input "Enter a string:"; i$
+15 if i$ = "HELLO" then 20
+17 print "STRING WAS NOT HELLO"
+18 END
+20 PRINT i$
+30 END

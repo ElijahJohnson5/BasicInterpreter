@@ -1,5 +1,5 @@
 module Parser
-  (parseBasicFile, parseTest, liftUnary, liftBoolUnary, liftRela, liftOp, Statement(..), Expression(..)) where
+  (parseBasicFile, parseTest, liftUnary, liftBoolUnary, liftRela, liftOp, liftStringOp, liftRelaString, Statement(..), Expression(..)) where
 
 import Prelude hiding (lines)
 import Parselib hiding (space, int)
@@ -13,6 +13,7 @@ data Statement = Dim [Expression]
   | Goto Int
   | GoSub Int
   | If Expression Int
+  | IfElse Expression Int Int
   | Input String [Expression]
   | Let Expression Expression
   | Next [Expression]
@@ -23,10 +24,10 @@ data Statement = Dim [Expression]
   | Assignment Expression Expression 
   | NoOp deriving Show
 
-data Expression = BinaryOp String (Expression -> Expression -> Expression) Expression Expression
+data Expression = BinaryOp String (Expression -> Expression -> Expression) (Expression -> Expression -> Expression) Expression Expression
   | Not Expression
   | Negate Expression
-  | Id Char | Function String Expression 
+  | Id String | Function String Expression 
   | IntConst { intConst :: Int } | StringConst String 
   | FloatConst { floatConst :: Float } 
   | BoolConst { boolConst :: Bool } | Array Expression [Expression] 
@@ -35,7 +36,7 @@ data Expression = BinaryOp String (Expression -> Expression -> Expression) Expre
   | Array2D { array2d :: (IOArray (Int, Int) Expression) }
 
 instance Show Expression where
-  show (BinaryOp a _ b c) = "BinaryOp: " ++ show b ++ a ++ show c
+  show (BinaryOp a _ _ b c) = "BinaryOp: " ++ show b ++ a ++ show c
   show (Not a) = "NOT " ++ show a
   show (Negate a) = "-" ++ show a
   show (Id a) = show a
@@ -59,6 +60,14 @@ liftOp op (IntConst a) (IntConst b) = IntConst . floor $ (fromIntegral a) `op` (
 liftOp op (FloatConst a) (FloatConst b) = FloatConst $ a `op` b
 liftOp op (FloatConst a) (IntConst b) = FloatConst $ a `op` (fromIntegral b)
 liftOp op (IntConst a) (FloatConst b) = FloatConst $ (fromIntegral a) `op` b
+
+liftStringOp op (StringConst a) (IntConst b) = StringConst $ a `op` (show b)
+liftStringOp op (StringConst a) (StringConst b) = StringConst $ a `op` b
+liftStringOp op (StringConst a) (FloatConst b) = StringConst $ a `op` (show b)
+liftStringOp op (IntConst a) (StringConst b) = StringConst $ (show a) `op` b
+liftStringOp op (FloatConst a) (StringConst b) = StringConst $ (show a) `op` b
+
+liftRelaString op (StringConst a) (StringConst b) = BoolConst $ a `op` b
 
 liftOp' op (IntConst a) (IntConst b) = FloatConst $ (fromIntegral a) `op` (fromIntegral b)
 liftOp' op x y = liftOp op x y
@@ -85,10 +94,17 @@ int = do {char '-'; n <- natural; return (-n)} +++ natural
 bInt :: Parser Int
 bInt = do { a <- int; space; return a }
 
-bId :: Parser Char
-bId = do { a <- sat (isLetter); space; return a }
+bId :: Parser String
+bId = do { a <- sat (isAlpha); as <- (many alphanum); char '$'; space; return ('$':a:as) } +++ do { a <- sat (isAlpha); as <- (many alphanum); space; return (a:as) } 
 
 symbol s = do { string s; space; }
+
+caseInsensitiveChar c = char (toLower c) +++ char (toUpper c)
+
+caseInsensitiveString "" = return ""
+caseInsensitiveString (c:cs) = do { caseInsensitiveChar c; caseInsensitiveString cs; return (c:cs) } 
+
+caseInsensitiveSymbol s = do { caseInsensitiveString s; space; }
 
 parseString = do { a <- bString; return (StringConst a) }
 
@@ -97,33 +113,33 @@ parseId = do { a <- bId; return (Id a) }
 parseInt = do { a <- bInt; return (IntConst a) }
 
 expression = chainl1 andExpression op
-  where op = do { symbol "OR"; return $ BinaryOp "OR"  (liftAndOr (||)) }
+  where op = do { symbol "OR"; return $ BinaryOp "OR"  (liftAndOr (||)) ((liftAndOr (||))) }
 
 andExpression = chainl1 notExpression op
-  where op = do { symbol "AND"; return $ BinaryOp "AND" (liftAndOr (&&)) }
+  where op = do { symbol "AND"; return $ BinaryOp "AND" (liftAndOr (&&)) (liftAndOr (&&)) }
 
 notExpression = do { symbol "NOT"; a <- compareExpression; space; return (Not a) } 
   +++ compareExpression
 
 compareExpression = chainl1 addExpression op
-  where op = do { symbol "<>"; return $ BinaryOp "<>" (liftRela (/=)) } 
-            +++ do { symbol ">="; return $ BinaryOp ">=" (liftRela (>=)) } 
-            +++ do { symbol "<="; return $ BinaryOp "<=" (liftRela (<=)) }
-            +++ do { symbol ">"; return $ BinaryOp ">" (liftRela (>)) } 
-            +++ do { symbol "<"; return $ BinaryOp "<" (liftRela (<)) } 
-            +++ do { symbol "="; return $ BinaryOp "=" (liftRela (==)) } 
+  where op = do { symbol "<>"; return $ BinaryOp "<>" (liftRela (/=)) (liftRelaString (/=)) } 
+            +++ do { symbol ">="; return $ BinaryOp ">=" (liftRela (>=)) (liftRelaString (>=)) } 
+            +++ do { symbol "<="; return $ BinaryOp "<=" (liftRela (<=)) (liftRelaString (<=)) }
+            +++ do { symbol ">"; return $ BinaryOp ">" (liftRela (>)) (liftRelaString (>)) } 
+            +++ do { symbol "<"; return $ BinaryOp "<" (liftRela (<)) (liftRelaString (<)) } 
+            +++ do { symbol "="; return $ BinaryOp "=" (liftRela (==)) (liftRelaString (==)) } 
 
 addExpression = chainl1 multExpression op
-  where op = do { symbol "+"; return $ BinaryOp "+" (liftOp (+))  } +++ do { symbol "-"; return $ BinaryOp "-" (liftOp (-)) }
+  where op = do { symbol "+"; return $ BinaryOp "+" (liftOp (+)) (liftStringOp (++))  } +++ do { symbol "-"; return $ BinaryOp "-" (liftOp (-)) (liftOp (-)) }
 
 multExpression = chainl1 negateExpression op
-  where op = do { symbol "*"; return $ BinaryOp "*" (liftOp (*)) } +++ do { symbol "/"; return $ BinaryOp "/" (liftOp (/)) }
+  where op = do { symbol "*"; return $ BinaryOp "*" (liftOp (*)) (liftOp (*)) } +++ do { symbol "/"; return $ BinaryOp "/" (liftOp' (/)) (liftOp' (/)) }
 
 negateExpression = do { char '-'; a <- powerExpression; space; return (Negate a) } 
   +++ powerExpression
 
 powerExpression = chainl1 value op
-  where op = do { symbol "^"; return $ BinaryOp "^" (liftOp' (**)) }
+  where op = do { symbol "^"; return $ BinaryOp "^" (liftOp' (**)) (liftOp' (**)) }
 
 parenExpression = do { symbol "("; a <- expression; space; symbol ")"; return a }
 
@@ -138,7 +154,7 @@ arr = do
   space 
   symbol "(" 
   b <- expressionList
-  space 
+  space
   symbol ")"
   return (Array a b)
 
@@ -146,46 +162,50 @@ arrList = sepby1 arr (space >> symbol ",")
 
 idList = sepby1 parseId (space >> symbol ",") 
 
+variableList = sepby1 variable (space >> symbol ",")
+
 intList = sepby1 parseInt (space >> symbol ",")
 
 printList = do { a <- expression; symbol ","; b <- printList; return ((CommaPrint a) : b) } +++ do { a <- expression; symbol ";"; b <- printList; return ((SemiPrint a) : b) } +++ do { a <- expression; space; return [(NewLineExpression a)] } +++ do { return [] }
 
-function = do { symbol "INT"; a <- parenExpression; return (Function "INT" a) } 
-  +++ do { symbol "RND"; a <- parenExpression; return (Function "RND" a) } +++ do { symbol "TAB"; a <- parenExpression; return (Function "TAB" a)}
+function = do { caseInsensitiveSymbol "INT"; a <- parenExpression; return (Function "INT" a) } 
+  +++ do { caseInsensitiveSymbol "RND"; a <- parenExpression; return (Function "RND" a) } +++ do { caseInsensitiveSymbol "TAB"; a <- parenExpression; return (Function "TAB" a)}
 
 constant = parseInt +++ parseString
 
-parseDim = do { symbol "DIM"; a <- arrList; return (Dim a); }
+parseDim = do { caseInsensitiveSymbol "DIM"; a <- arrList; return (Dim a); }
 
-parseEnd = do { symbol "END"; space; return End }
+parseEnd = do { caseInsensitiveSymbol "END"; space; return End }
 
-parseFor = do { symbol "FOR"; a <- parseId; symbol "="; b <- expression; symbol "TO"; c <- expression; d <- parseStep;  return (For a b c d) }
+parseFor = do { caseInsensitiveSymbol "FOR"; a <- parseId; symbol "="; b <- expression; caseInsensitiveSymbol "TO"; c <- expression; d <- parseStep;  return (For a b c d) }
 
-parseStep = do { symbol "STEP"; expression } +++ return (IntConst 1)
+parseStep = do { caseInsensitiveSymbol "STEP"; expression } +++ return (IntConst 1)
 
-parseGoto = do { symbol "GOTO"; a <- bInt; return (Goto a) }
+parseGoto = do { caseInsensitiveSymbol "GOTO"; a <- bInt; return (Goto a) }
 
-parseGoSub = do { symbol "GOSUB"; a <- bInt; return (GoSub a) }
+parseGoSub = do { caseInsensitiveSymbol "GOSUB"; a <- bInt; return (GoSub a) }
 
-parseIf = do { symbol "IF"; a <- expression; symbol "THEN"; b <- bInt; return (If a b) }
+parseIf = do { caseInsensitiveSymbol "IF"; a <- expression; caseInsensitiveSymbol "THEN"; b <- bInt; return (If a b) }
 
-parseInput = do { symbol "INPUT"; a <- option "" bString; space; option ' ' (char ';'); space; b <- idList; return (Input a b) }
+parseIfElse = do { caseInsensitiveSymbol "IF"; a <- expression; caseInsensitiveSymbol "THEN"; b <- bInt; caseInsensitiveSymbol "ELSE"; c <- bInt; return (IfElse a b c) }
 
-parseLet = do { symbol "LET"; a <- variable; symbol "="; space; b <- expression; return (Let a b) }
+parseInput = do { caseInsensitiveSymbol "INPUT"; a <- option "" bString; space; option ' ' (char ';'); space; b <- variableList; return (Input a b) }
 
-parseNext = do { symbol "NEXT"; a <- idList; return (Next a) }
+parseLet = do { caseInsensitiveSymbol "LET"; a <- variable; symbol "="; space; b <- expression; return (Let a b) }
 
-parseOn = do { symbol "ON"; a <- expression; symbol "GOTO"; b <- intList; return (On a b) }
+parseNext = do { caseInsensitiveSymbol "NEXT"; a <- idList; return (Next a) }
 
-parsePrint = do { symbol "PRINT"; a <- printList; return (Print a) } +++ do { symbol "PRINT"; return $ Print [] }
+parseOn = do { caseInsensitiveSymbol "ON"; a <- expression; caseInsensitiveSymbol "GOTO"; b <- intList; return (On a b) }
 
-parseRem = do { symbol "REM"; a <- many (sat isPrint); return (Rem a) }
+parsePrint = do { caseInsensitiveSymbol "PRINT"; a <- printList; return (Print a) } +++ do { caseInsensitiveSymbol "PRINT"; return $ Print [] }
 
-parseReturn = do { symbol "RETURN"; return Return }
+parseRem = do { caseInsensitiveSymbol "REM"; a <- many (sat isPrint); return (Rem a) }
+
+parseReturn = do { caseInsensitiveSymbol "RETURN"; return Return }
 
 parseAssignment = do { a <- variable; space; symbol "="; b <- expression; return (Assignment a b) }
 
-statement = parseDim +++ parseEnd +++ parseFor +++ parseGoto +++ parseGoSub +++ parseIf +++ parseInput +++ parseLet +++ parseNext +++ parseOn +++ parsePrint +++ parseRem +++ parseReturn +++ parseAssignment
+statement = parseDim +++ parseEnd +++ parseFor +++ parseGoto +++ parseGoSub +++ parseIfElse +++ parseIf +++ parseInput +++ parseLet +++ parseNext +++ parseOn +++ parsePrint +++ parseRem +++ parseReturn +++ parseAssignment
 
 statements = do { a <- statement; symbol ":"; b <- statements; return (a : b); } +++ do { a <- statement; return [a] } 
 

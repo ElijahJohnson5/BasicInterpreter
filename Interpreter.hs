@@ -48,9 +48,13 @@ evalStatements (f@(line,(For id ini to step)):stack) (b,(s@(Next (i:is)):ss)) = 
 evalStatements stack (b,gs@(GoSub n):ss) = do
   lMap <- ask
   evalStatements ((b,gs):stack) (n, (lMap IntMap.! n))
-evalStatements (gs@(line,(GoSub n)):stack) (b,(s@(Return):ss)) = do
-  lMap <- ask
-  evalStatements stack (fromJust (IntMap.lookupGT line lMap))
+evalStatements stack (b,(s@(Return):ss)) = do
+  helper stack
+  where helper [] = error ("Should not happen")
+        helper ((line,(GoSub n)):stack) = do
+              lMap <- ask
+              evalStatements stack (fromJust (IntMap.lookupGT line lMap))
+        helper (s:stack) = helper stack
 evalStatements stack (line,(s@(If a b):ss)) = do 
   s' <- evalStatement s
   case s' of 
@@ -61,7 +65,9 @@ evalStatements stack (line,(s@(If a b):ss)) = do
 evalStatements stack (line,(s:ss)) = do
   s' <- evalStatement s
   case s' of 
-    End -> return []
+    End -> do
+      liftIO $ putStrLn (show (stack)) 
+      return []
     Goto n -> do 
       lMap <- ask
       evalStatements stack (n, (lMap IntMap.! n))
@@ -69,6 +75,7 @@ evalStatements stack (line,(s:ss)) = do
 
 
 ifStatement (BoolConst a) b = if a then (Goto b) else NoOp
+ifElseStatement (BoolConst a) b c = if a then (Goto b) else (Goto c)
 
 forCheck :: Expression -> Int -> Expression -> Expression -> Expression -> Interpreter Statement
 forCheck id line (IntConst a) to step = do
@@ -84,6 +91,9 @@ forSkip stack (l,((Next i):ss)) = evalStatements stack (l, ss)
 forSkip stack (l,(s:ss)) = forSkip stack (l,ss) 
 
 evalStatement :: Statement -> Interpreter Statement
+evalStatement (IfElse a b c) = do
+  a' <- evalExpression a
+  return (ifElseStatement a' b c)
 evalStatement (If a b) = do
   a' <- evalExpression a
   return (ifStatement a' b)
@@ -129,20 +139,21 @@ evalStatement s@(Dim xs) = do
 evalStatement s@(Input str expr) = do 
   liftIO $ putStr (str ++ " ")
   a <- liftIO $ getLine
-  let b = fmap (read :: String -> Float) (sepLineBy a ',')
-  insertMultipleSymbols expr (fmap FloatConst b)
+  let b = (sepLineBy a ',')
+  insertMultipleSymbols expr b
   return s
 evalStatement s = return s
 
 forHelper id ini' to to' step step' = do
+  to'' <- liftIO $ basicInt to'
   if (intConst step') > 0 then 
-      if (intConst ini') <= (intConst to') then
-          return (For id ini' (BinaryOp "<=" (liftRela (<=)) id to) step)
+      if (intConst ini') <= (intConst to'') then
+          return (For id ini' (BinaryOp "<="  (liftRela (<=)) (liftRela (<=)) id to) step)
         else 
           return NoOp
     else 
-      if (intConst ini') >= (intConst to') then
-          return (For id ini' (BinaryOp ">=" (liftRela (>=)) id to) step)
+      if (intConst ini') >= (intConst to'') then
+          return (For id ini' (BinaryOp ">=" (liftRela (>=)) (liftRela (>=)) id to) step)
         else
           return NoOp
 
@@ -156,22 +167,36 @@ sepLineBy line sep = case dropWhile (== sep) line of
         where (w, s'') = break (== sep) s'
 
 insertMultipleSymbols [] [] = return ()
+insertMultipleSymbols (i@(Id ('$':rest)):ids) (v:vals) = do
+  insertSymbol i (StringConst v)
+  insertMultipleSymbols ids vals
+insertMultipleSymbols (i@(Array a b):ids) (v:vals) = do
+  b' <- mapM evalExpression b
+  updateArray (Array a b') (FloatConst (read v :: Float))
+  insertMultipleSymbols ids vals
 insertMultipleSymbols (i:ids) (v:vals) = do
-  insertSymbol i v
+  insertSymbol i (FloatConst (read v :: Float))
   insertMultipleSymbols ids vals
 
 dimHelper [] = return []
 dimHelper ((Array a b):xs) = do
   b' <- mapM evalExpression b
-  insertArray (Array a b')
+  b'' <- mapM floatConstToIntConst b'
+  insertArray (Array a b'')
   dimHelper xs
 
+floatConstToIntConst (FloatConst x) = return $ IntConst (floor x)
+floatConstToIntConst x = return $ x
 
 evalExpression :: Expression -> Interpreter Expression
-evalExpression (BinaryOp str op a b) = do
+evalExpression (BinaryOp str op strOp a b) = do
   a' <- evalExpression a
   b' <- evalExpression b
-  return (op a' b')
+  helper a' b'
+  where helper c@(StringConst _) d@(StringConst _) = return $ strOp c d
+        helper c@(StringConst _) d = return $ strOp c d
+        helper c d@(StringConst _) = return $ strOp c d
+        helper c d = return $ op c d 
 evalExpression (Not a) = do
   a' <- evalExpression a
   return (liftBoolUnary (not) a')
@@ -180,11 +205,12 @@ evalExpression (Negate a) = do
   return (liftUnary (negate) a')
 evalExpression (Id a) = do
   symbolMap <- get
-  return (symbolMap Map.! [a])
+  return (symbolMap Map.! a)
 evalExpression arr@(Array (Id a) b) = do
   b' <- mapM evalExpression b
+  b'' <- mapM floatConstToIntConst b'
   symbolMap <- get
-  lift $ lift $ readFromArray (symbolMap Map.! (a : "arr")) b'
+  liftIO $ readFromArray (symbolMap Map.! (a ++ "arr")) b''
 evalExpression (Function name a) = do
   a' <- evalExpression a
   b <- liftIO $ getBasicFunction name $ a'
@@ -205,8 +231,11 @@ printStatement ((NewLineExpression a):xs) = do
 printStatement ((CommaPrint a):xs) = do
   liftIO $ putStr ((show a) ++ "\t")
   printStatement xs
+printStatement ((SemiPrint (StringConst a)):xs) = do
+  liftIO $ putStr a
+  printStatement xs
 printStatement ((SemiPrint a):xs) = do
-  liftIO $ putStr (show a)
+  liftIO $ putStr (show a ++ " ")
   printStatement xs
 
 
@@ -244,26 +273,26 @@ create1DArray x = do
 insertArray :: Expression -> Interpreter ()
 insertArray (Array (Id a) ((IntConst x):(IntConst y):[])) = do
   b <- lift $ lift $ create2DArray (x,y)
-  modify (Map.insert (a : "arr") (Array2D b))
+  modify (Map.insert (a ++ "arr") (Array2D b))
   return ()
 insertArray (Array (Id a) [(IntConst x)]) = do
   b <- lift $ lift $ create1DArray x
-  modify (Map.insert (a : "arr") (Array1D b))
+  modify (Map.insert (a ++ "arr") (Array1D b))
   return ()
 
 updateArray :: Expression -> Expression -> Interpreter ()
 updateArray (Array (Id a) ((IntConst x):(IntConst y):[])) val = do
   symbolMap <- get
-  lift $ lift $ (writeArray (array2d (symbolMap Map.! (a : "arr"))) (x,y) val)
+  liftIO $ (writeArray (array2d (symbolMap Map.! (a ++ "arr"))) (x,y) val)
   return ()
 updateArray (Array (Id a) [(IntConst x)]) val = do
   symbolMap <- get
-  lift $ lift $ (writeArray (array1d (symbolMap Map.! (a : "arr"))) x val)
+  liftIO $ (writeArray (array1d (symbolMap Map.! (a ++ "arr"))) x val)
   return ()
 
 insertSymbol :: Expression -> Expression -> Interpreter ()
 insertSymbol (Id a) val = do 
-  modify (Map.insert [a] val)
+  modify (Map.insert a val)
   return ()
 
 readFromArray :: Expression -> [Expression] -> IO (Expression)
@@ -286,4 +315,3 @@ basicTest s = do
   hSetBuffering stdout NoBuffering
   program <- parseTest s
   runStateT (runReaderT runProgram (lineMap program)) (Map.empty :: Map.Map String Expression)
-  return ()
