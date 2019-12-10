@@ -108,8 +108,8 @@
 635 print "BATS NEARBY!"
 640 next k
 645 next j
-650 print "YOU ARE IN ROOM"; l(1)
-655 print "TUNNELS LEAD TO"; s(l,1);s(l,2);s(l,3)
+650 print "YOU ARE IN ROOM "; l(1)
+655 print "TUNNELS LEAD TO" ; s(l,1);s(l,2);s(l,3)
 660 print
 665 return
 670 rem *** CHOOSE OPTION ***

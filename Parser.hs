@@ -130,10 +130,12 @@ compareExpression = chainl1 addExpression op
             +++ do { symbol "="; return $ BinaryOp "=" (liftRela (==)) (liftRelaString (==)) } 
 
 addExpression = chainl1 multExpression op
-  where op = do { symbol "+"; return $ BinaryOp "+" (liftOp (+)) (liftStringOp (++))  } +++ do { symbol "-"; return $ BinaryOp "-" (liftOp (-)) (liftOp (-)) }
+  where op = do { symbol "+"; return $ BinaryOp "+" (liftOp (+)) (liftStringOp (++))  } 
+            +++ do { symbol "-"; return $ BinaryOp "-" (liftOp (-)) (liftOp (-)) }
 
 multExpression = chainl1 negateExpression op
-  where op = do { symbol "*"; return $ BinaryOp "*" (liftOp (*)) (liftOp (*)) } +++ do { symbol "/"; return $ BinaryOp "/" (liftOp' (/)) (liftOp' (/)) }
+  where op = do { symbol "*"; return $ BinaryOp "*" (liftOp (*)) (liftOp (*)) } 
+            +++ do { symbol "/"; return $ BinaryOp "/" (liftOp' (/)) (liftOp' (/)) }
 
 negateExpression = do { char '-'; a <- powerExpression; space; return (Negate a) } 
   +++ powerExpression

@@ -10,6 +10,7 @@ import Data.Array.IO
 import System.IO
 import System.Random
 import Data.Maybe
+import System.Environment
 
 lineMap lineList = IntMap.fromList lineList
 
@@ -66,7 +67,6 @@ evalStatements stack (line,(s:ss)) = do
   s' <- evalStatement s
   case s' of 
     End -> do
-      liftIO $ putStrLn (show (stack)) 
       return []
     Goto n -> do 
       lMap <- ask
@@ -315,3 +315,10 @@ basicTest s = do
   hSetBuffering stdout NoBuffering
   program <- parseTest s
   runStateT (runReaderT runProgram (lineMap program)) (Map.empty :: Map.Map String Expression)
+
+main = do
+  args <- getArgs
+  hSetBuffering stdout NoBuffering
+  program <- parseTest (head args)
+  runStateT (runReaderT runProgram (lineMap program)) (Map.empty :: Map.Map String Expression)
+  return ()
